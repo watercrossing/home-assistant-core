@@ -33,6 +33,11 @@ DOUBLE_PRESS = "remote_button_double_press"
 SHORT_PRESS = "remote_button_short_press"
 LONG_PRESS = "remote_button_long_press"
 LONG_RELEASE = "remote_button_long_release"
+ARGS = "args"
+
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def _same_lists(list_a, list_b):
@@ -207,6 +212,66 @@ async def test_if_fires_on_event(hass, mock_devices, calls):
     assert len(calls) == 1
     assert calls[0].data["message"] == "service called"
 
+async def test_if_fires_on_event_complex(hass, mock_devices, calls):
+    """Test for remote triggers firing."""
+
+    zigpy_device, zha_device = mock_devices
+
+    zigpy_device.device_automation_triggers = {
+        (DOUBLE_PRESS, SHORT_PRESS): {COMMAND: COMMAND_DOUBLE, ARGS: [0, 32, 0]}, #service1
+        (DOUBLE_PRESS, DOUBLE_PRESS): {COMMAND: COMMAND_DOUBLE, ARGS: [1, 32, 0]}, #service2
+    }
+
+    ieee_address = str(zha_device.ieee)
+    ha_device_registry = dr.async_get(hass)
+    reg_device = ha_device_registry.async_get_device({("zha", ieee_address)})
+
+    assert await async_setup_component(
+        hass,
+        automation.DOMAIN,
+        {
+            automation.DOMAIN: [
+                {
+                    "trigger": {
+                        "device_id": reg_device.id,
+                        "domain": "zha",
+                        "platform": "device",
+                        "type": DOUBLE_PRESS,
+                        "subtype": SHORT_PRESS,
+                    },
+                    "action": {
+                        "service": "test.automation",
+                        "data": {"message": "service1 called"},
+                    },
+                },
+                {
+                    "trigger": {
+                        "device_id": reg_device.id,
+                        "domain": "zha",
+                        "platform": "device",
+                        "type": DOUBLE_PRESS,
+                        "subtype": DOUBLE_PRESS,
+                    },
+                    "action": {
+                        "service": "test.automation",
+                        "data": {"message": "service2 called"},
+                    },
+                }
+            ]
+        },
+    )
+
+    await hass.async_block_till_done()
+
+    channel = zha_device.channels.pools[0].client_channels["1:0x0006"]
+    logger.info("Sending service1")
+    channel.zha_send_event(COMMAND_DOUBLE, [0, 32, 0]) #service1
+    #channel.zha_send_event(COMMAND_DOUBLE, [1, 32, 0]) #service2
+    
+    await hass.async_block_till_done()
+
+    logger.info("calls is: " + repr(calls)) # but both service1 and service2 are triggered
+    assert len(calls) == 1
 
 async def test_device_offline_fires(
     hass, zigpy_device_mock, zha_device_restored, calls
